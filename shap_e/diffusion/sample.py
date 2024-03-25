@@ -44,7 +44,11 @@ def sample_latents(
     s_churn: float,
     device: Optional[torch.device] = None,
     progress: bool = False,
+    x_T: torch.Tensor = None,
 ) -> torch.Tensor:
+    if x_T is not None:
+        assert x_T.shape[0] == batch_size, "x_T must have same batch size as sample"
+        
     sample_shape = (batch_size, model.d_latent)
 
     if device is None:
@@ -72,6 +76,7 @@ def sample_latents(
                 s_churn=s_churn,
                 guidance_scale=guidance_scale,
                 progress=progress,
+                x_T=x_T
             )
         else:
             internal_batch_size = batch_size

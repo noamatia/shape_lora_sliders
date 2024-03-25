@@ -855,6 +855,22 @@ class GaussianDiffusion:
                 "learned",
                 "learned_range",
             ]:
+                #B, C, X = x_t.shape
+                #B_o, X_o = model_output.shape
+                #assert B == B_o
+                #assert X == X_o // 2
+                #model_output, model_output_cond = th.split(model_output, X, dim=1)
+                #model_output = model_output.unsqueeze(dim=1)
+                #model_output_cond = model_output_cond.unsqueeze(dim=1)
+                ## see page 5 in the paper
+                #s = s.unsqueeze(dim=1).unsqueeze(dim=1)
+                #model_output = model_output + s * (model_output_cond - model_output)
+
+                eps, var = th.split(model_output, *x_t.shape[2:], dim=1)
+                eps = eps.unsqueeze(dim=1)
+                var = var.unsqueeze(dim=1)
+                model_output = th.cat([eps, var], dim=1)
+
                 B, C = x_t.shape[:2]
                 assert model_output.shape == (
                     B,
@@ -883,11 +899,12 @@ class GaussianDiffusion:
                 "epsilon": noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
+            # ES: perhaps we need weighting here? (currently just taking mean)
             terms["mse"] = mean_flat((target - model_output) ** 2)
             if "vb" in terms:
-                terms["loss"] = terms["mse"] + terms["vb"]
+                terms["loss"] = terms["mse"].mean() + terms["vb"].mean()
             else:
-                terms["loss"] = terms["mse"]
+                terms["loss"] = terms["mse"].mean()
         else:
             raise NotImplementedError(self.loss_type)
 

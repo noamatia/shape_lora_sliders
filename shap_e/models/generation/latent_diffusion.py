@@ -30,3 +30,26 @@ class SplitVectorDiffusion(nn.Module):
             ],
             dim=1,
         )
+        
+    def print_parameter_status(self):
+        for name, param in self.wrapped.named_parameters():
+            print(f"name: {name}, shape: {param.shape}, req grad: {param.requires_grad}")
+
+    def freeze_all_parameters(self):
+        for param in self.parameters():
+            param.requires_grad = False
+            
+    def unfreeze_transformer_backbone(self, num_layers=None, reverse=False):
+        total_num_layers = self.wrapped.backbone.layers
+        if num_layers is None:
+            num_layers = total_num_layers
+        for name, param in self.wrapped.backbone.named_parameters():
+            split_name = name.split('.')
+            layer_num = int(split_name[1])
+            if reverse:
+                layer_num = total_num_layers - layer_num
+            if layer_num >= num_layers:
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+                
