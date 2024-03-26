@@ -3,7 +3,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 os.environ["WANDB_API_KEY"] = "7b14a62f11dc360ce036cf59b53df0c12cd87f5a"
 import wandb
 import random
-from lora_sliders.trainning.utils import *
+from utils import *
 from tqdm import tqdm
 from lora_sliders.lora import LoRANetwork
 from datetime import datetime
