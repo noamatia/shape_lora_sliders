@@ -29,6 +29,7 @@ def render_model(
     delete_material: bool = False,
     verbose: bool = False,
     timeout: float = 15 * 60,
+    color: str = "",
 ):
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_in = model_path
@@ -68,6 +69,8 @@ def render_model(
                 str(BASIC_AMBIENT_COLOR),
                 "--basic_diffuse",
                 str(BASIC_DIFFUSE_COLOR),
+                "--color",
+                color,
             ]
         )
         if fast_mode:

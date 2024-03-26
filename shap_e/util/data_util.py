@@ -30,6 +30,7 @@ def load_or_create_multimodal_batch(
     mv_image_size: int = 512,
     mv_alpha_removal: str = "black",
     verbose: bool = False,
+    color: str = ""
 ) -> AttrDict:
     if verbose:
         print("creating point cloud...")
@@ -41,6 +42,7 @@ def load_or_create_multimodal_batch(
         point_count=point_count,
         num_views=pc_num_views,
         verbose=verbose,
+        color=color
     )
     raw_pc = np.concatenate([pc.coords, pc.select_channels(["R", "G", "B"])], axis=-1)
     encode_me = torch.from_numpy(raw_pc).float().to(device)
@@ -56,6 +58,7 @@ def load_or_create_multimodal_batch(
             extract_material=False,
             light_mode=mv_light_mode,
             verbose=verbose,
+            color=color
         ) as mv:
             cameras, views, view_alphas, depths = [], [], [], []
             for view_idx in range(mv.num_views):
@@ -91,6 +94,7 @@ def load_or_create_pc(
     point_count: int,
     num_views: int,
     verbose: bool = False,
+    color: str = ""
 ) -> PointCloud:
 
     assert (model_path is not None) ^ (
@@ -114,6 +118,7 @@ def load_or_create_pc(
         cache_dir=cache_dir,
         num_views=num_views,
         verbose=verbose,
+        color=color
     ) as mv:
         if verbose:
             print("extracting point cloud from multiview...")
@@ -135,6 +140,7 @@ def load_or_create_multiview(
     extract_material: bool = True,
     light_mode: Optional[str] = None,
     verbose: bool = False,
+    color: str = ""
 ) -> Iterator[BlenderViewData]:
 
     assert (model_path is not None) ^ (
@@ -165,6 +171,7 @@ def load_or_create_multiview(
         camera_pose="random",
         light_mode=light_mode or "uniform",
         verbose=verbose,
+        color=color
     )
 
     with tempfile.TemporaryDirectory() as tmp_dir:

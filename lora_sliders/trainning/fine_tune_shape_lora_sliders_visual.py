@@ -3,9 +3,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 os.environ["WANDB_API_KEY"] = "7b14a62f11dc360ce036cf59b53df0c12cd87f5a"
 import wandb
 import random
-from utils import *
+from lora_sliders.trainning.utils import *
 from tqdm import tqdm
-from lora import LoRANetwork
+from lora_sliders.lora import LoRANetwork
 from datetime import datetime
 from diffusers.utils import export_to_gif
 from shap_e.diffusion.sample import sample_latents
@@ -46,7 +46,8 @@ latents = [latent for latent in latents if '.pt' in latent]
 
 def load_latents(folder: str) -> list:
     lats = [torch.load(os.path.join(args.data_dir, folder, latent)).to(device) for latent in latents]
-    lats = random.sample(lats, 18)
+    if args.subset:
+        lats = random.sample(lats, args.subset)
     lats = [lats[i:i + args.batch_size] for i in range(0, len(lats) - args.batch_size + 1, args.batch_size)]
     lats = [torch.cat(lats).detach().unsqueeze(1) for lats in lats]
     return lats

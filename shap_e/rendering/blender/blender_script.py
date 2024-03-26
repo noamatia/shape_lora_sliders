@@ -24,7 +24,7 @@ FORMAT_VERSION = 6
 UNIFORM_LIGHT_DIRECTION = None
 BASIC_AMBIENT_COLOR = None
 BASIC_DIFFUSE_COLOR = None
-
+COLOR_TO_RGB = {'blue': (0, 0, 255), 'red': (255, 0, 0)}
 
 def clear_scene():
     bpy.ops.object.select_all(action="SELECT")
@@ -200,7 +200,7 @@ def create_uniform_light(backend):
     create_light(-pos, energy=5.0, angle=angle)
 
 
-def create_vertex_color_shaders():
+def create_vertex_color_shaders(color):
     # By default, Blender will ignore vertex colors in both the
     # Eevee and Cycles backends, since these colors aren't
     # associated with a material.
@@ -210,15 +210,24 @@ def create_vertex_color_shaders():
     for obj in bpy.context.scene.objects.values():
         if not isinstance(obj.data, (bpy.types.Mesh)):
             continue
+        
+        if color and color not in COLOR_TO_RGB:
+            color = ""
 
-        if len(obj.data.materials):
-            # We don't want to override any existing materials.
-            continue
+        if len(obj.data.materials) and color:
+            obj.data.materials.clear()
 
         color_keys = (obj.data.vertex_colors or {}).keys()
-        if not len(color_keys):
-            # Many objects will have no materials *or* vertex colors.
-            continue
+        if not len(color_keys) and color:
+            obj.data.vertex_colors.new()
+            color_layer = obj.data.vertex_colors["Col"]
+            i = 0
+            r, g, b = COLOR_TO_RGB[color]
+            for poly in obj.data.polygons:
+                for _ in poly.loop_indices:
+                    color_layer.data[i].color = (r, g, b, 1.0)
+                    i += 1
+            color_keys = (obj.data.vertex_colors or {}).keys()
 
         mat = bpy.data.materials.new(name="VertexColored")
         mat.use_nodes = True
@@ -580,6 +589,7 @@ def save_rendering_dataset(
     fast_mode: bool,
     extract_material: bool,
     delete_material: bool,
+    color: str,
 ):
     assert light_mode in ["random", "uniform", "camera", "basic"]
     assert camera_pose in ["random", "z-circular", "z-circular-elevated"]
@@ -596,7 +606,7 @@ def save_rendering_dataset(
     elif light_mode == "uniform":
         create_uniform_light(backend)
     create_camera()
-    create_vertex_color_shaders()
+    create_vertex_color_shaders(color)
     if delete_material:
         delete_all_materials()
     if extract_material or basic_lighting:
@@ -656,6 +666,7 @@ def main():
     parser.add_argument("--fast_mode", action="store_true")
     parser.add_argument("--extract_material", action="store_true")
     parser.add_argument("--delete_material", action="store_true")
+    parser.add_argument("--color", type=str, default="")
 
     # Prevent constants from being repeated.
     parser.add_argument("--uniform_light_direction", required=True, type=float, nargs="+")
@@ -679,6 +690,7 @@ def main():
         fast_mode=args.fast_mode,
         extract_material=args.extract_material,
         delete_material=args.delete_material,
+        color=args.color
     )
 
 
