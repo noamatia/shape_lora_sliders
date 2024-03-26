@@ -3,3 +3,5 @@ __pycache__/
 *.egg-info/
 shap_e_model_cache/
 wandb/
+lora_sliders/outputs/
+lora_sliders/datasets/
