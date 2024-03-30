@@ -30,21 +30,23 @@ def uncond_guide_model(
 
 def sample_latents(
     *,
-    batch_size: int,
     model: nn.Module,
     diffusion: GaussianDiffusion,
     model_kwargs: Dict[str, Any],
     guidance_scale: float,
-    clip_denoised: bool,
-    use_fp16: bool,
-    use_karras: bool,
-    karras_steps: int,
-    sigma_min: float,
-    sigma_max: float,
-    s_churn: float,
+    batch_size: int = 1,
+    clip_denoised: bool = True,
+    use_fp16: bool = True,
+    use_karras: bool = True,
+    karras_steps: int = 64,
+    sigma_min: float = 1e-3,
+    sigma_max: float = 160,
+    s_churn: float = 0,
     device: Optional[torch.device] = None,
     progress: bool = False,
     x_T: torch.Tensor = None,
+    # network: torch.nn.Module = None,
+    # scale: int = None,
 ) -> torch.Tensor:
     if x_T is not None:
         assert x_T.shape[0] == batch_size, "x_T must have same batch size as sample"
@@ -76,7 +78,9 @@ def sample_latents(
                 s_churn=s_churn,
                 guidance_scale=guidance_scale,
                 progress=progress,
-                x_T=x_T
+                x_T=x_T,
+                # network=network,
+                # scale=scale,
             )
         else:
             internal_batch_size = batch_size

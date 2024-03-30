@@ -134,6 +134,8 @@ def karras_sample_progressive(
     s_noise=1.0,
     guidance_scale=0.0,
     x_T=None,
+    # network=None,
+    # scale=None
 ):
     sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, rho, device=device)
     if x_T is None:
@@ -143,6 +145,7 @@ def karras_sample_progressive(
     ]
 
     if sampler != "ancestral":
+        # sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise, network=network, scale=scale)
         sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise)
     else:
         sampler_args = {}
@@ -247,6 +250,8 @@ def sample_heun(
     s_tmin=0.0,
     s_tmax=float("inf"),
     s_noise=1.0,
+    # network=None,
+    # scale=None,
 ):
     """Implements Algorithm 2 (Heun steps) from Karras et al. (2022)."""
     s_in = x.new_ones([x.shape[0]])
@@ -257,6 +262,11 @@ def sample_heun(
         indices = tqdm(indices)
 
     for i in indices:
+        # if i < 65:
+        #     network.set_lora_slider(-1)
+        # else:
+        #     network.set_lora_slider(scale)
+        # with network:
         gamma = (
             min(s_churn / (len(sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigmas[i] <= s_tmax else 0.0
         )
