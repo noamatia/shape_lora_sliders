@@ -34,6 +34,11 @@ def sample_latents(
     diffusion: GaussianDiffusion,
     model_kwargs: Dict[str, Any],
     guidance_scale: float,
+    x_T: torch.Tensor,
+    network: torch.nn.Module,
+    scale: int,
+    t_start: int,
+    eps: torch.Tensor,
     batch_size: int = 1,
     clip_denoised: bool = True,
     use_fp16: bool = True,
@@ -44,12 +49,8 @@ def sample_latents(
     s_churn: float = 0,
     device: Optional[torch.device] = None,
     progress: bool = False,
-    x_T: torch.Tensor = None,
-    # network: torch.nn.Module = None,
-    # scale: int = None,
 ) -> torch.Tensor:
-    if x_T is not None:
-        assert x_T.shape[0] == batch_size, "x_T must have same batch size as sample"
+    assert x_T.shape[0] == batch_size, "x_T must have same batch size as sample"
         
     sample_shape = (batch_size, model.d_latent)
 
@@ -79,8 +80,10 @@ def sample_latents(
                 guidance_scale=guidance_scale,
                 progress=progress,
                 x_T=x_T,
-                # network=network,
-                # scale=scale,
+                network=network,
+                scale=scale,
+                t_start=t_start,
+                eps=eps
             )
         else:
             internal_batch_size = batch_size

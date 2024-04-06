@@ -134,8 +134,10 @@ def karras_sample_progressive(
     s_noise=1.0,
     guidance_scale=0.0,
     x_T=None,
-    # network=None,
-    # scale=None
+    network=None,
+    scale=None,
+    t_start=None,
+    eps=None
 ):
     sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, rho, device=device)
     if x_T is None:
@@ -145,8 +147,7 @@ def karras_sample_progressive(
     ]
 
     if sampler != "ancestral":
-        # sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise, network=network, scale=scale)
-        sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise)
+        sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise, network=network, scale=scale, t_start=t_start, eps=eps)
     else:
         sampler_args = {}
 
@@ -250,8 +251,10 @@ def sample_heun(
     s_tmin=0.0,
     s_tmax=float("inf"),
     s_noise=1.0,
-    # network=None,
-    # scale=None,
+    network=None,
+    scale=None,
+    t_start=None,
+    eps=None
 ):
     """Implements Algorithm 2 (Heun steps) from Karras et al. (2022)."""
     s_in = x.new_ones([x.shape[0]])
@@ -262,32 +265,33 @@ def sample_heun(
         indices = tqdm(indices)
 
     for i in indices:
-        # if i < 65:
-        #     network.set_lora_slider(-1)
-        # else:
-        #     network.set_lora_slider(scale)
-        # with network:
-        gamma = (
-            min(s_churn / (len(sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigmas[i] <= s_tmax else 0.0
-        )
-        eps = th.randn_like(x) * s_noise
-        sigma_hat = sigmas[i] * (gamma + 1)
-        if gamma > 0:
-            x = x + eps * (sigma_hat**2 - sigmas[i] ** 2) ** 0.5
-        denoised = denoiser(x, sigma_hat * s_in)
-        d = to_d(x, sigma_hat, denoised)
-        yield {"x": x, "i": i, "sigma": sigmas[i], "sigma_hat": sigma_hat, "pred_xstart": denoised}
-        dt = sigmas[i + 1] - sigma_hat
-        if sigmas[i + 1] == 0:
-            # Euler method
-            x = x + d * dt
+        if i < t_start:
+            network.set_lora_slider(0)
         else:
-            # Heun's method
-            x_2 = x + d * dt
-            denoised_2 = denoiser(x_2, sigmas[i + 1] * s_in)
-            d_2 = to_d(x_2, sigmas[i + 1], denoised_2)
-            d_prime = (d + d_2) / 2
-            x = x + d_prime * dt
+            network.set_lora_slider(scale)
+        with network:
+            gamma = (
+                min(s_churn / (len(sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigmas[i] <= s_tmax else 0.0
+            )
+            if eps is None:
+                eps = th.randn_like(x) * s_noise
+            sigma_hat = sigmas[i] * (gamma + 1)
+            if gamma > 0:
+                x = x + eps * (sigma_hat**2 - sigmas[i] ** 2) ** 0.5
+            denoised = denoiser(x, sigma_hat * s_in)
+            d = to_d(x, sigma_hat, denoised)
+            yield {"x": x, "i": i, "sigma": sigmas[i], "sigma_hat": sigma_hat, "pred_xstart": denoised}
+            dt = sigmas[i + 1] - sigma_hat
+            if sigmas[i + 1] == 0:
+                # Euler method
+                x = x + d * dt
+            else:
+                # Heun's method
+                x_2 = x + d * dt
+                denoised_2 = denoiser(x_2, sigmas[i + 1] * s_in)
+                d_2 = to_d(x_2, sigmas[i + 1], denoised_2)
+                d_prime = (d + d_2) / 2
+                x = x + d_prime * dt
     yield {"x": x, "pred_xstart": denoised}
 
 

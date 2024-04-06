@@ -1,85 +1,45 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
-os.environ["WANDB_API_KEY"] = "7b14a62f11dc360ce036cf59b53df0c12cd87f5a"
 import wandb
-import random
 from utils import *
 from tqdm import tqdm
-from datetime import datetime
-from diffusers.utils import export_to_gif
-from lora_sliders.lora import LoRANetwork
 from shap_e.diffusion.sample import sample_latents
-from shap_e.models.download import load_model, load_config
-from shap_e.diffusion.gaussian_diffusion import diffusion_from_config
-from shap_e.util.notebooks import create_pan_cameras, decode_latent_images
+from shap_e.util.notebooks import create_pan_cameras
+from shap_e.diffusion.gaussian_diffusion import mean_flat
+
 
 args = parse_args()      
-name = f"{args.slider_name}_{args.name}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}"
-output_dir = os.path.join('lora_sliders', 'outputs', name)
-samples_dir = os.path.join(output_dir, 'samples')
-os.makedirs(samples_dir, exist_ok=True)
+name, paths = build_name_and_paths(args)
+wandb.init(project=args.wandb_project, name=name, config=vars(args))
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-xm = load_model('transmitter', device=device)
-model = load_model('text300M', device=device)
-model.wrapped.cond_drop_prob = args.cond_drop_prob
-model.freeze_all_parameters()
-network = LoRANetwork(model.wrapped, args.rank, args.alpha).to(device)
-model.print_parameter_status()
-network.print_parameter_status()
-diffusion = diffusion_from_config(load_config('diffusion'))
-optimizer = torch.optim.Adam(network.prepare_optimizer_params(), lr=args.lr)
-
-folders = parse_arg(args.folders)
-prompts = parse_arg(args.prompts)
-scales = parse_arg(args.scales, is_int=True)
-assert folders.shape[0] == scales.shape[0], "The number of folders and scales must be the same."
-assert prompts.shape[0] == scales.shape[0], "The number of prompts and scales must be the same."
-assert scales.shape[0] == 2, "Currently the number of scales must be 2."
-scale_high = abs(random.choice(list(scales)))
-scale_low = -scale_high
-folder_high = folders[scales==scale_high][0]
-folder_low = folders[scales==scale_low][0]
-prompt_high = prompts[scales==scale_high][0]
-prompt_low = prompts[scales==scale_low][0]
-latents = os.listdir(os.path.join(args.data_dir, folder_high))
-latents = [latent for latent in latents if '.pt' in latent]
-
-def load_latents(folder: str) -> list:
-    lats = [torch.load(os.path.join(args.data_dir, folder, latent)).to(device) for latent in latents]
-    if args.subset:
-        lats = random.sample(lats, args.subset)
-    lats = [lats[i:i + args.batch_size] for i in range(0, len(lats) - args.batch_size + 1, args.batch_size)]
-    lats = [torch.cat(lats).detach().unsqueeze(1) for lats in lats]
-    return lats
-
-latents_high = load_latents(folder_high)
-latents_low = load_latents(folder_low)
-assert len(latents_high) == len(latents_low), "The number of high and low latents must be the same."
-print(f"Loaded {len(latents_high)} latent files")
-model_kwargs_high = dict(texts=[prompt_high for _ in range(args.batch_size)])
-model_kwargs_low = dict(texts=[prompt_low for _ in range(args.batch_size)])
-test_model_kwargs_high = dict(texts=[prompt_high])
-test_model_kwargs_low = dict(texts=[prompt_low ])
+print(f"Device: {device}")
+xm, model, network, diffusion, optimizer = build_models(args, device)
 cameras = create_pan_cameras(args.size, device)
+
+folder_high, folder_low, prompt_high, prompt_low, scale_high, scale_low = build_folders_prompts_and_scales(args)
+print(f"Folder high: {folder_high}, Folder low: {folder_low}")
+print(f"Prompt high: {prompt_high}, Prompt low: {prompt_low}")
+print(f"Scale high: {scale_high}, Scale low: {scale_low}")
+model_kwargs_high, test_model_kwargs_high = build_model_kwargs(prompt_high, args.batch_size)
+model_kwargs_low, test_model_kwargs_low = build_model_kwargs(prompt_low, args.batch_size)
+
+latents = build_latents(args, folder_high)
+wandb.config["dataset_size"] =  len(latents)
+latents_high, latents_low = load_latents(args, folder_high, device, latents), load_latents(args, folder_low, device, latents)
+assert len(latents_high) == len(latents_low), "The number of high and low latents must be the same."
+print(f"Loaded {len(latents)} latent files in {len(latents_high)} batches.")
+masks = build_masks(args.masking_diff_percentile, latents_high, latents_low)
+# sanity_check(latents_high, latents_low, masks, cameras, xm)
+
 sigma_max = 160
 x_T_test = torch.randn((1, model.d_latent), device=device).expand(1, -1) * sigma_max
-torch.save(x_T_test, os.path.join(output_dir, 'x_T_test.pt'))
+torch.save(x_T_test, paths['x_T_test'])
 
-wandb.init(project=args.wandb_project, name=name, config=vars(args) | {"dataset_size": len(latents)})
-
-def train_step(scale: int, batch: torch.Tensor, timesteps: torch.Tensor, model_kwargs: dict) -> int:
+def train_step(scale: int, batch: torch.Tensor, timesteps: torch.Tensor, model_kwargs: dict, noise: torch.Tensor) -> int:
     network.set_lora_slider(scale)
     with network:
-        losses = diffusion.training_losses(model, batch, timesteps, model_kwargs)
+        losses = diffusion.training_losses(model, batch, timesteps, model_kwargs, noise)
     loss = losses['loss'] / args.grad_acc_steps
-    return loss
-
-def backpropagate(loss: torch.Tensor, grad_acc_step: int):
-    loss.backward()
-    if grad_acc_step % args.grad_acc_steps == 0:
-        optimizer.step()
-        optimizer.zero_grad()
+    return loss, losses['output']
         
 def test_step(scale: int, i: int, log_data: dict, sacle_type: str, test_model_kwargs: dict):
     network.set_lora_slider(scale)
@@ -93,34 +53,42 @@ def test_step(scale: int, i: int, log_data: dict, sacle_type: str, test_model_kw
                                       sigma_max=sigma_max, 
                                       x_T=x_T_test)
     images = decode_latent_images(xm, test_latents[0], cameras, rendering_mode=args.render_mode)
-    result_path = os.path.join(samples_dir, f'{i}_{sacle_type}.gif')
+    result_path = os.path.join(paths['samples'], f'{i}_{sacle_type}.gif')
     log_data[f"output_{sacle_type}"] = wandb.Video(export_to_gif(images, result_path))
-    flush(test_latents)
 
 grad_acc_step, best_loss = 0, 1e9
 pbar = tqdm(range(args.epochs))
 for i in pbar:  
-    loss_for_epoch_high, loss_for_epoch_low = 0, 0
-    for batch_high, batch_low in tqdm(zip(latents_high, latents_low)):
+    loss_for_epoch_high, loss_for_epoch_low, loss_for_epoch_masked_diff = 0, 0, 0
+    for batch_high, batch_low, mask in tqdm(zip(latents_high, latents_low, masks)):
         timesteps = torch.tensor(random.sample(range(args.num_timesteps), args.batch_size)).to(device).detach()
-        loss_high = train_step(scale_high, batch_high, timesteps, model_kwargs_high)
+        noise = torch.randn_like(batch_high)
+        
+        loss_high, output_high = train_step(scale_high, batch_high, timesteps, model_kwargs_high, noise)
         loss_for_epoch_high += loss_high.item()
-        grad_acc_step += 1
-        backpropagate(loss_high, grad_acc_step)
-        loss_low = train_step(scale_low, batch_low, timesteps, model_kwargs_low)
+        loss_low, output_low = train_step(scale_low, batch_low, timesteps, model_kwargs_low, noise)
         loss_for_epoch_low += loss_low.item()
+        total_loss = args.beta * (loss_high + loss_low)
+        
+        masked_diff_loss = mean_flat((mask * (output_high - output_low)) ** 2).mean() / args.grad_acc_steps
+        loss_for_epoch_masked_diff += masked_diff_loss.item()
+        total_loss += (1 - args.beta) * masked_diff_loss
+        
         grad_acc_step += 1
-        backpropagate(loss_low, grad_acc_step)
-    flush(latents_high, latents_low, timesteps)
-    log_data = {"loss_high": loss_for_epoch_high, "loss_low": loss_for_epoch_low}
-    avg_loss_for_epoch = (loss_for_epoch_high + loss_for_epoch_low) / 2
+        total_loss.backward()
+        if grad_acc_step % args.grad_acc_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+            
+    log_data = {"loss_high": loss_for_epoch_high, "loss_low": loss_for_epoch_low, "loss_masked_diff": loss_for_epoch_masked_diff}
+    avg_loss_for_epoch = (loss_for_epoch_high + loss_for_epoch_low + loss_for_epoch_masked_diff) / 3
     pbar.set_description(f"loss: {avg_loss_for_epoch:.4f}")
     if avg_loss_for_epoch < best_loss:
         best_loss = avg_loss_for_epoch
-        network.save_weights(os.path.join(output_dir, f'model_best.pt'))
+        network.save_weights(paths['model_best'])
     if i % args.test_steps == 0:
         test_step(scale_high, i, log_data, "high", test_model_kwargs_high)
         test_step(scale_low, i, log_data, "low", test_model_kwargs_low)
     wandb.log(log_data)
-network.save_weights(os.path.join(output_dir, f'model_final.pt'))
+network.save_weights(paths['model_final'])
     
