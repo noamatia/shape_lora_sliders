@@ -19,20 +19,29 @@ folder_high, folder_low, prompt_high, prompt_low, scale_high, scale_low = build_
 print(f"Folder high: {folder_high}, Folder low: {folder_low}")
 print(f"Prompt high: {prompt_high}, Prompt low: {prompt_low}")
 print(f"Scale high: {scale_high}, Scale low: {scale_low}")
-model_kwargs_high, test_model_kwargs_high = build_model_kwargs(prompt_high, args.batch_size)
-model_kwargs_low, test_model_kwargs_low = build_model_kwargs(prompt_low, args.batch_size)
 
 latents = build_latents(args, folder_high)
 wandb.config["dataset_size"] =  len(latents)
+wandb.config["latents_ids"] =  latents
 latents_high, latents_low = load_latents(args, folder_high, device, latents), load_latents(args, folder_low, device, latents)
 assert len(latents_high) == len(latents_low), "The number of high and low latents must be the same."
 print(f"Loaded {len(latents)} latent files in {len(latents_high)} batches.")
+model_kwargs_high_list = build_model_kwargs(args, prompt_high, latents)
+wandb.config["model_kwargs_high_list"] = model_kwargs_high_list
+model_kwargs_low_list = build_model_kwargs(args, prompt_low, latents)
+wandb.config["model_kwargs_low_list"] = model_kwargs_low_list
+test_model_kwargs_high = build_model_kwargs_test(args, prompt_high)
+wandb.config["test_model_kwargs_high"] = test_model_kwargs_high
+test_model_kwargs_low = build_model_kwargs_test(args, prompt_low)
+wandb.config["test_model_kwargs_low"] = test_model_kwargs_low
 masks = build_masks(args.masking_diff_percentile, latents_high, latents_low)
 # sanity_check(latents_high, latents_low, masks, cameras, xm)
 
 sigma_max = 160
 x_T_test = torch.randn((1, model.d_latent), device=device).expand(1, -1) * sigma_max
 torch.save(x_T_test, paths['x_T_test'])
+eps_test = torch.randn_like(x_T_test)
+torch.save(eps_test, paths['eps_test'])
 
 def train_step(scale: int, batch: torch.Tensor, timesteps: torch.Tensor, model_kwargs: dict, noise: torch.Tensor) -> int:
     network.set_lora_slider(scale)
@@ -42,16 +51,18 @@ def train_step(scale: int, batch: torch.Tensor, timesteps: torch.Tensor, model_k
     return loss, losses['output']
         
 def test_step(scale: int, i: int, log_data: dict, sacle_type: str, test_model_kwargs: dict):
-    network.set_lora_slider(scale)
-    with network:
-        test_latents = sample_latents(model=model, 
-                                      diffusion=diffusion, 
-                                      model_kwargs=test_model_kwargs, 
-                                      guidance_scale=args.guidance_scale, 
-                                      device=device, 
-                                      progress=True, 
-                                      sigma_max=sigma_max, 
-                                      x_T=x_T_test)
+    test_latents = sample_latents(model=model, 
+                                    diffusion=diffusion, 
+                                    model_kwargs=test_model_kwargs, 
+                                    guidance_scale=args.guidance_scale, 
+                                    device=device, 
+                                    progress=True, 
+                                    sigma_max=sigma_max, 
+                                    x_T=x_T_test,
+                                    eps=eps_test,
+                                    network=network,
+                                    scale=scale,
+                                    t_start=0)
     images = decode_latent_images(xm, test_latents[0], cameras, rendering_mode=args.render_mode)
     result_path = os.path.join(paths['samples'], f'{i}_{sacle_type}.gif')
     log_data[f"output_{sacle_type}"] = wandb.Video(export_to_gif(images, result_path))
@@ -60,7 +71,7 @@ grad_acc_step, best_loss = 0, 1e9
 pbar = tqdm(range(args.epochs))
 for i in pbar:  
     loss_for_epoch_high, loss_for_epoch_low, loss_for_epoch_masked_diff = 0, 0, 0
-    for batch_high, batch_low, mask in tqdm(zip(latents_high, latents_low, masks)):
+    for batch_high, batch_low, mask, model_kwargs_high, model_kwargs_low in tqdm(zip(latents_high, latents_low, masks, model_kwargs_high_list, model_kwargs_low_list)):
         timesteps = torch.tensor(random.sample(range(args.num_timesteps), args.batch_size)).to(device).detach()
         noise = torch.randn_like(batch_high)
         

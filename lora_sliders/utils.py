@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 os.environ["WANDB_API_KEY"] = "7b14a62f11dc360ce036cf59b53df0c12cd87f5a"
 import json
 import torch
@@ -23,17 +23,17 @@ def parse_arg(arg: str, is_int: bool = False) -> np.ndarray:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", type=str, required=True, help="Name of the run.")
+    parser.add_argument("--name", type=str, default='with_prompts_masking_percentile_100_beta_0_75', help="Name of the run.")
     parser.add_argument("--alpha", type=float, default=1.0, help="Alpha of LoRA.")
     parser.add_argument("--rank", type=int, default=4, help="Rank of LoRA.")
     parser.add_argument("--slider_name", type=str, default="armsslider", help="Name of the slider.")
-    parser.add_argument('--epochs', type=int, default=500, help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=1000, help='number of epochs')
     parser.add_argument('--data_dir', type=str, default='/home/noamatia/repos/shape_lora_sliders/lora_sliders/datasets/arms', help='data directory')
-    parser.add_argument('--prompts', type=str, default=' , ', help='prompts for generation')
+    parser.add_argument('--prompts', type=str, default='without armrests, with armrests', help='prompts for generation')
     parser.add_argument( "--folders", type=str, default='withoutarms/latents, witharms/latents', help="folders with different attribute-scaled images")
     parser.add_argument( "--scales", type=str, default = '-1, 1', help="scales for different attribute-scaled images")
-    parser.add_argument( "--batch_size", type=int, default=6, help="batch size")
-    parser.add_argument( "--grad_acc_steps", type=int, default=11, help="max timesteps")
+    parser.add_argument( "--batch_size", type=int, default=5, help="batch size")
+    parser.add_argument( "--grad_acc_steps", type=int, default=13, help="max timesteps")
     parser.add_argument('--cond_drop_prob', type=float, default=0.5, help='chance for model to ignore text condition during training')
     parser.add_argument('--num_timesteps', type=int, default=1024, help='number of timesteps (1024 in paper)')
     parser.add_argument('--lr', type=float, default=0.0002, help='learning rate')
@@ -42,9 +42,11 @@ def parse_args():
     parser.add_argument( "--render_mode", type=str, default="nerf", help="render mode")
     parser.add_argument('--size', type=int, default=160, help='images size')
     parser.add_argument('--test_steps', type=int, default=10, help='test steps')
-    parser.add_argument("--subset", type=str, help="json subset") # only_arms_latents
-    parser.add_argument('--masking_diff_percentile', type=int, default=0, help='masking diff percentile')
-    parser.add_argument( "--beta", type=float, default=1.0, help="beta")
+    parser.add_argument("--subset", type=str, default='only_arms_latents', help="json subset")
+    parser.add_argument('--masking_diff_percentile', type=int, default=100, help='masking diff percentile')
+    parser.add_argument( "--beta", type=float, default=0.75, help="beta")
+    parser.add_argument("--uid_to_object", type=str, default='uid_to_object', help="uid to object")
+    parser.add_argument("--test_object", type=str, default='a chair', help="uid to object")
     return parser.parse_args()
 
 def build_name_and_paths(args: argparse.Namespace) -> tuple:
@@ -54,6 +56,7 @@ def build_name_and_paths(args: argparse.Namespace) -> tuple:
     paths['samples'] = os.path.join(output_dir, 'samples')
     os.makedirs(paths['samples'], exist_ok=True)
     paths['x_T_test'] = os.path.join(output_dir, 'x_T_test.pt')
+    paths['eps_test'] = os.path.join(output_dir, 'eps_test.pt')
     paths['model_best'] = os.path.join(output_dir, 'model_best.pt')
     paths['model_final'] = os.path.join(output_dir, 'model_final.pt')
     return name, paths
@@ -101,10 +104,27 @@ def load_latents(args: argparse.Namespace, folder: str, device: torch.device, la
     lats = [torch.cat(lats).detach().unsqueeze(1) for lats in lats]
     return lats
 
-def build_model_kwargs(prompt: str, batch_size: int) -> tuple:
-    model_kwargs = dict(texts=[prompt for _ in range(batch_size)])
-    test_model_kwargs = dict(texts=[prompt])
-    return model_kwargs, test_model_kwargs
+def build_model_kwargs(args: argparse.Namespace, prompt: str, latents: list) -> list:
+    if args.uid_to_object:
+        assert prompt != '', "Prompt must be provided if uid_to_object is provided."
+        with open(os.path.join(args.data_dir, f'{args.uid_to_object}.json'), 'r') as f:
+            uid_to_object = json.load(f)
+        prompts = [uid_to_object[latent.split('.')[0]] + ' ' + prompt for latent in latents]
+    else:
+        assert prompt == '', "Prompt must be empty if uid_to_object is not provided."
+        prompts = ['' for _ in latents]
+    prompts += [prompts[i] for i in range(args.batch_size - (len(prompts) % args.batch_size))]
+    prompts = [prompts[i:i + args.batch_size] for i in range(0, len(prompts), args.batch_size)]
+    model_kwargs = [dict(texts=prompts[i]) for i in range(len(prompts))]
+    return model_kwargs
+
+def build_model_kwargs_test(args: argparse.Namespace, prompt: str) -> dict:
+    if args.test_object:
+        assert prompt != '', "Prompt must be provided if test_object is provided."
+        return dict(texts=[args.test_object + ' ' + prompt])
+    else:
+        assert prompt == '', "Prompt must be empty if test_object is not provided."
+        return dict(texts=[''])
 
 def build_masks(masking_diff_percentile: int, latents_high: list, latents_low: list) -> list:
     masks = []
