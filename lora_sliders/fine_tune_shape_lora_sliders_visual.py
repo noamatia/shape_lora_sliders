@@ -5,36 +5,29 @@ from shap_e.diffusion.sample import sample_latents
 from shap_e.util.notebooks import create_pan_cameras
 from shap_e.diffusion.gaussian_diffusion import mean_flat
 
-
-args = parse_args()      
-name, paths = build_name_and_paths(args)
+    
+name, paths = build_name_and_paths()
 wandb.init(project=args.wandb_project, name=name, config=vars(args))
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
-xm, model, network, diffusion, optimizer = build_models(args, device)
+xm, model, network, diffusion, optimizer = build_models(device)
 cameras = create_pan_cameras(args.size, device)
 
-folder_high, folder_low, prompt_high, prompt_low, scale_high, scale_low = build_folders_prompts_and_scales(args)
+folder_high, folder_low, prompt_high, prompt_low, scale_high, scale_low = build_folders_prompts_and_scales()
 print(f"Folder high: {folder_high}, Folder low: {folder_low}")
 print(f"Prompt high: {prompt_high}, Prompt low: {prompt_low}")
 print(f"Scale high: {scale_high}, Scale low: {scale_low}")
 
-latents = build_latents(args, folder_high)
+latents = build_latents(folder_high)
 wandb.config["dataset_size"] =  len(latents)
 wandb.config["latents_ids"] =  latents
-latents_high, latents_low = load_latents(args, folder_high, device, latents), load_latents(args, folder_low, device, latents)
+latents_high, latents_low = load_latents(folder_high, device, latents), load_latents(folder_low, device, latents)
 assert len(latents_high) == len(latents_low), "The number of high and low latents must be the same."
 print(f"Loaded {len(latents)} latent files in {len(latents_high)} batches.")
-model_kwargs_high_list = build_model_kwargs(args, prompt_high, latents)
-wandb.config["model_kwargs_high_list"] = model_kwargs_high_list
-model_kwargs_low_list = build_model_kwargs(args, prompt_low, latents)
-wandb.config["model_kwargs_low_list"] = model_kwargs_low_list
-test_model_kwargs_high = build_model_kwargs_test(args, prompt_high)
-wandb.config["test_model_kwargs_high"] = test_model_kwargs_high
-test_model_kwargs_low = build_model_kwargs_test(args, prompt_low)
-wandb.config["test_model_kwargs_low"] = test_model_kwargs_low
-masks = build_masks(args.masking_diff_percentile, latents_high, latents_low)
+model_kwargs_high_list, test_model_kwargs_high =  build_model_kwargs(prompt_high, latents, "high")
+model_kwargs_low_list, test_model_kwargs_low =  build_model_kwargs(prompt_low, latents, "low")
+masks = build_masks(latents_high, latents_low)
 # sanity_check(latents_high, latents_low, masks, cameras, xm)
 
 sigma_max = 160
@@ -63,9 +56,7 @@ def test_step(scale: int, i: int, log_data: dict, sacle_type: str, test_model_kw
                                     network=network,
                                     scale=scale,
                                     t_start=0)
-    images = decode_latent_images(xm, test_latents[0], cameras, rendering_mode=args.render_mode)
-    result_path = os.path.join(paths['samples'], f'{i}_{sacle_type}.gif')
-    log_data[f"output_{sacle_type}"] = wandb.Video(export_to_gif(images, result_path))
+    log_data[f"output_{sacle_type}"] = wandb.Video(decode_and_export(test_latents[0], paths['samples'], f'{i}_{sacle_type}.gif', cameras, xm))
 
 grad_acc_step, best_loss = 0, 1e9
 pbar = tqdm(range(args.epochs))
