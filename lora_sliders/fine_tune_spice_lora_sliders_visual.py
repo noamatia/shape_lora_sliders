@@ -1,5 +1,4 @@
 from utils import *
-from tqdm import tqdm
 from shap_e.diffusion.sample import sample_latents
 from shap_e.util.notebooks import create_pan_cameras
 from shap_e.diffusion.gaussian_diffusion import mean_flat
@@ -18,18 +17,25 @@ print(f"Folder high: {folder_high}, Folder low: {folder_low}")
 print(f"Prompt high: {prompt_high}, Prompt low: {prompt_low}")
 print(f"Scale high: {scale_high}, Scale low: {scale_low}")
 
-latents = build_latents(folder_high)
-wandb.config["dataset_size"] =  len(latents)
-wandb.config["latents_ids"] =  latents
-latents_high, latents_low = load_latents(folder_high, device, latents), load_latents(folder_low, device, latents)
-assert len(latents_high) == len(latents_low), "The number of high and low latents must be the same."
-print(f"Loaded {len(latents)} latent files in {len(latents_high)} batches.")
-model_kwargs_high_list, test_model_kwargs_high =  build_model_kwargs(prompt_high, latents, "high", latents_low)
-wandb.log({f"condition_high":  wandb.Video(decode_and_export(test_model_kwargs_high['cond'], paths['samples'], f'condition_high.gif', cameras, xm))})
-model_kwargs_low_list, test_model_kwargs_low =  build_model_kwargs(prompt_low, latents, "low", latents_high)
-wandb.log({f"condition_low":  wandb.Video(decode_and_export(test_model_kwargs_low['cond'], paths['samples'], f'condition_low.gif', cameras, xm))})
-masks = build_masks(latents_high, latents_low)
-# sanity_check(latents_high, latents_low, masks, cameras, xm)
+latents_train = build_latents('train', folder_high)
+latents_test = build_latents('test', folder_high)
+latents_high_train, latents_low_train = load_latents('train', folder_high, device, latents_train), load_latents('train', folder_low, device, latents_train)
+latents_high_test, latents_low_test = load_latents('test', folder_high, device, latents_test), load_latents('test', folder_low, device, latents_test)
+assert len(latents_high_train) == len(latents_low_train), "The number of high and low latents must be the same."
+assert len(latents_high_test) == len(latents_low_test), "The number of high and low latents must be the same."
+print(f"Loaded {len(latents_train)} train latent files in {len(latents_high_train)} batches.")
+print(f"Loaded {len(latents_test)} test latent files in {len(latents_high_test)} batches.")
+
+
+model_kwargs_high_train_list =  build_model_kwargs_list(prompt_high, latents_train, "train", "high", latents_low_train)
+model_kwargs_high_test_list =  build_model_kwargs_list(prompt_high, latents_test, "test", "high", latents_low_test)
+model_kwargs_low_train_list =  build_model_kwargs_list(prompt_low, latents_train, "train", "low", latents_high_train)
+model_kwargs_low_test_list =  build_model_kwargs_list(prompt_low, latents_test, "test", "low", latents_high_test)
+decode_and_export_test_conditions(model_kwargs_high_test_list, model_kwargs_low_test_list, paths, cameras, xm)
+masks_train = build_masks(latents_high_train, latents_low_train)
+# masks_test = build_masks(latents_high_test, latents_low_test)
+# sanity_check(latents_high_train, latents_low_train, masks_train, cameras, xm, 'train')
+# sanity_check(latents_high_test, latents_low_test, masks_test, cameras, xm, 'test')
 
 sigma_max = 160
 x_T_test = torch.randn((1, model.d_latent), device=device).expand(1, -1) * sigma_max
@@ -38,32 +44,40 @@ eps_test = torch.randn_like(x_T_test)
 torch.save(eps_test, paths['eps_test'])
 
 def train_step(scale: int, batch: torch.Tensor, timesteps: torch.Tensor, model_kwargs: dict, noise: torch.Tensor) -> int:
-    network.set_lora_slider(scale)
-    with network:
-        losses = diffusion.training_losses(model, batch, timesteps, model_kwargs, noise)
-    loss = losses['loss'] / args.grad_acc_steps
-    return loss, losses['output']
+    try:
+        network.set_lora_slider(scale)
+        with network:
+            losses = diffusion.training_losses(model, batch, timesteps, model_kwargs, noise)
+        loss = losses['loss'] / args.grad_acc_steps
+        return loss, losses['output']
+    except:
+        pass
         
-def test_step(scale: int, i: int, log_data: dict, sacle_type: str, test_model_kwargs: dict):
-    test_latents = sample_latents(model=model, 
-                                    diffusion=diffusion, 
-                                    model_kwargs=test_model_kwargs, 
-                                    guidance_scale=args.guidance_scale, 
-                                    device=device, 
-                                    progress=True, 
-                                    sigma_max=sigma_max, 
-                                    x_T=x_T_test,
-                                    eps=eps_test,
-                                    network=network,
-                                    scale=scale,
-                                    t_start=0)
-    log_data[f"output_{sacle_type}"] = wandb.Video(decode_and_export(test_latents[0], paths['samples'], f'{i}_{sacle_type}.gif', cameras, xm))
+def test_step(scale: int, epoch: int, log_data: dict, high_or_low: str, model_kwargs_test_list: list):
+    for test_model_kwargs in tqdm(model_kwargs_test_list, total=len(model_kwargs_test_list), desc=f"Testing {high_or_low} epoch {epoch}"):
+        test_latents = sample_latents(model=model, 
+                                        diffusion=diffusion, 
+                                        model_kwargs=test_model_kwargs, 
+                                        guidance_scale=args.guidance_scale, 
+                                        device=device, 
+                                        progress=True, 
+                                        sigma_max=sigma_max, 
+                                        x_T=x_T_test.repeat(args.batch_size, 1),
+                                        eps=eps_test,
+                                        network=network,
+                                        scale=scale,
+                                        t_start=0,
+                                        batch_size=args.batch_size)
+        for i, test_latent in enumerate(test_latents):
+            uid = test_model_kwargs['uid'][i]
+            uid_output_dir = os.path.join(paths['samples'], uid, high_or_low)
+            log_data[f"output_{uid}_{high_or_low}"] = wandb.Video(decode_and_export(test_latent, uid_output_dir, f'output_{epoch}.gif', cameras, xm))
 
-grad_acc_step, best_loss = 0, 1e9
+grad_acc_step = 0
 pbar = tqdm(range(args.epochs))
 for i in pbar:  
     loss_for_epoch_high, loss_for_epoch_low, loss_for_epoch_masked_diff = 0, 0, 0
-    for batch_high, batch_low, mask, model_kwargs_high, model_kwargs_low in tqdm(zip(latents_high, latents_low, masks, model_kwargs_high_list, model_kwargs_low_list)):
+    for batch_high, batch_low, mask, model_kwargs_high, model_kwargs_low in tqdm(zip(latents_high_train, latents_low_train, masks_train, model_kwargs_high_train_list, model_kwargs_low_train_list)):
         timesteps = torch.tensor(random.sample(range(args.num_timesteps), args.batch_size)).to(device).detach()
         noise = torch.randn_like(batch_high)
         
@@ -86,12 +100,10 @@ for i in pbar:
     log_data = {"loss_high": loss_for_epoch_high, "loss_low": loss_for_epoch_low, "loss_masked_diff": loss_for_epoch_masked_diff}
     avg_loss_for_epoch = (loss_for_epoch_high + loss_for_epoch_low + loss_for_epoch_masked_diff) / 3
     pbar.set_description(f"loss: {avg_loss_for_epoch:.4f}")
-    if avg_loss_for_epoch < best_loss:
-        best_loss = avg_loss_for_epoch
-        network.save_weights(paths['model_best'])
     if i % args.test_steps == 0:
-        test_step(scale_high, i, log_data, "high", test_model_kwargs_high)
-        test_step(scale_low, i, log_data, "low", test_model_kwargs_low)
+        test_step(scale_high, i, log_data, "high", model_kwargs_high_test_list)
+        test_step(scale_low, i, log_data, "low", model_kwargs_low_test_list)
+        network.save_weights(os.path.join(paths['models'], f'model_{i}.pt'))
     wandb.log(log_data)
-network.save_weights(paths['model_final'])
+network.save_weights(os.path.join(paths['models'], 'model_final.pt'))
     
