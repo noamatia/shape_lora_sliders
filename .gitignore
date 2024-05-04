@@ -4,5 +4,3 @@ __pycache__/
 shap_e_model_cache/
 spic_e_model_cache/
 wandb/
-lora_sliders/outputs/
-lora_sliders/datasets/

@@ -7,7 +7,12 @@ from unsloth import FastLanguageModel
 
 obj = 'chair'
 with open(f'/home/noamatia/repos/shape_lora_sliders/lora_sliders/llama3/{obj}.json', 'r') as f:
-    options = json.load(f)
+    option_pairss = json.load(f)
+options = []
+for option_pair in option_pairss:
+    options.append(option_pair[0])
+    options.append(option_pair[1])
+print(options)
 alpaca_prompt = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
 ### Instruction:
@@ -28,7 +33,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit = True,
 )
 FastLanguageModel.for_inference(model)
-csv_path = f'/scratch/noam/shapetalk/language/{obj}_test.csv'
+csv_path = f'/scratch/noam/shapetalk/language/{obj}_train.csv'
 df = pd.read_csv(csv_path)
 df['llama3_uttarance'] = ""
 for i, row in tqdm(df.iterrows(), total=len(df)):
@@ -42,6 +47,9 @@ for i, row in tqdm(df.iterrows(), total=len(df)):
         ], return_tensors="pt").to("cuda")
     outputs = model.generate(**inputs, max_new_tokens=64, use_cache=True)
     llama3_uttarance = tokenizer.batch_decode(outputs)[0].split("\n")[-4]
-    print(row["utterance"], ' -> ', llama3_uttarance)
+    if "Unknown" not in llama3_uttarance:
+        print("*"*50)
+        print(row["utterance"], ' -> ', llama3_uttarance)
+        print("*"*50)
     df.at[i, 'llama3_uttarance'] = llama3_uttarance
 df.to_csv(csv_path, index=False)
