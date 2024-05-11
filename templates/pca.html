@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scroll State to Image</title>
+    <style>
+        .image-container {
+            max-width: 100%;
+            height: auto;
+            margin: 10px;
+        }
+        .cluster-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-around;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+
+<form>
+    {% for scroll_num in range(num_entries) %}
+        <label for="scroll{{ scroll_num }}">Principal Component {{ scroll_num + 1 }}:</label>
+        <input type="range" id="scroll{{ scroll_num }}" name="scroll{{ scroll_num }}" min="{{ target_min }}" max="{{ target_max }}">
+        <span id="value{{ scroll_num }}"></span>
+        <br>
+    {% endfor %}
+
+    <div id="result" class="cluster-row">
+        <!-- Resulting image will be displayed here -->
+    </div>
+</form>
+
+<script>
+    var num_entries = {{ num_entries }};
+    var target_min = {{ target_min }};
+    var target_max = {{ target_max }};
+    var stateToImages = {{ state_to_images|tojson|safe }};
+    
+    function updateImage() {
+        let imagePaths = stateToImages;
+        for (var scroll_num = 0; scroll_num < num_entries; scroll_num++) {
+            var scrollElem = document.getElementById('scroll' + scroll_num);
+            if (imagePaths != undefined)
+                imagePaths = imagePaths[scrollElem.value];
+            document.getElementById('value' + scroll_num).textContent = scrollElem.value;
+        }
+        
+        innerHTML = '';
+        for (let i = 0; i < imagePaths.length; i++) {
+            imagePath = imagePaths[i];
+            innerHTML += '<div class="image-container"><img src="' + imagePath + '" class="image-container"></div>';
+        }
+        document.getElementById('result').innerHTML = innerHTML;
+    }
+
+    for (var scroll_num = 0; scroll_num < num_entries; scroll_num++) {
+        var scrollElem = document.getElementById('scroll' + scroll_num);
+        scrollElem.addEventListener('input', updateImage);
+    }
+
+    updateImage();
+</script>
+
+</body>
+</html>
